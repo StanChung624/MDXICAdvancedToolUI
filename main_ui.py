@@ -357,6 +357,13 @@ class MainWindow(QtWidgets.QMainWindow):
             "-i",
             os.fspath(output_path),
         ]
+
+        with open('command.log', 'r') as f:
+            command_line = ''
+            for com in command:
+                command_line += com
+            f.write(command_line)
+
         try:
             completed = subprocess.run(command, capture_output=True, text=True, check=False)
         except OSError as exc:
