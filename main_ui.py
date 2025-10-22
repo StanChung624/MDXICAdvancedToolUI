@@ -3,6 +3,8 @@ import json
 import re
 from pathlib import Path, PureWindowsPath
 
+from run_reader import run_reader
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 
@@ -194,6 +196,8 @@ class TextFieldWidget(BaseFieldWidget):
 
 
 class PathFieldWidget(BaseFieldWidget):
+    pathChanged = QtCore.Signal(str)
+
     def __init__(self, field_def, parent=None):
         super().__init__(field_def, parent)
         self.mode = field_def.get("mode", "directory")
@@ -208,6 +212,7 @@ class PathFieldWidget(BaseFieldWidget):
         browse_btn.clicked.connect(self._browse)
         layout.addWidget(self.line_edit)
         layout.addWidget(browse_btn)
+        self.line_edit.editingFinished.connect(self._emit_current_path)
 
     def _browse(self):
         current_value = self.value() or str(Path.home())
@@ -233,12 +238,18 @@ class PathFieldWidget(BaseFieldWidget):
                 if self.dialog_mode.lower() != "open" and self.default_suffix and not Path(path).suffix:
                     path = f"{path}.{self.default_suffix.lstrip('.')}"
                 self.line_edit.setText(path)
+                self._emit_current_path()
 
     def value(self):
         return self.line_edit.text()
 
-    def set_path(self, path):
+    def set_path(self, path, emit_change=False):
         self.line_edit.setText(path)
+        if emit_change:
+            self._emit_current_path()
+
+    def _emit_current_path(self):
+        self.pathChanged.emit(self.value())
 
 
 class ListFieldWidget(BaseFieldWidget):
@@ -462,6 +473,9 @@ class MaterialRowWidget(QtWidgets.QFrame):
             material_data["Models"] = entries
         return material_data
 
+    def set_material_name(self, name):
+        self.name_edit.setText(stringify_value(name))
+
 
 class MaterialsTableWidget(BaseFieldWidget):
     def __init__(self, field_def, parent=None):
@@ -495,17 +509,29 @@ class MaterialsTableWidget(BaseFieldWidget):
 
         self.row_widgets = []
 
-    def add_row(self):
+    def add_row(self, material_name=None):
         row = MaterialRowWidget(self.model_column, self.parameters_column, parent=self.rows_container)
         row.removed.connect(self._remove_row)
         self.rows_layout.addWidget(row)
         self.row_widgets.append(row)
+        if material_name:
+            row.set_material_name(material_name)
+        return row
 
     def _remove_row(self, row_widget):
         if row_widget in self.row_widgets:
             self.row_widgets.remove(row_widget)
         row_widget.setParent(None)
         row_widget.deleteLater()
+
+    def clear_rows(self):
+        for row in list(self.row_widgets):
+            self._remove_row(row)
+
+    def populate_from_names(self, material_names):
+        self.clear_rows()
+        for material_name in material_names or []:
+            self.add_row(material_name=material_name)
 
     def value(self):
         values = []
@@ -877,6 +903,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.root_dir = Path(__file__).parent
         self.solvers, self.solver_definitions = load_structure(STRUCTURE_DEFINITION)
         self.parameter_widgets = {}
+        self.run_file_widget = None
+        self.materials_widget = None
+        self._last_run_reader_error = None
 
         central = QtWidgets.QWidget(self)
         self.setCentralWidget(central)
@@ -942,6 +971,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _rebuild_form(self, solver_name):
         self._clear_form()
         self.parameter_widgets = {}
+        self.run_file_widget = None
+        self.materials_widget = None
 
         sections = self.solver_definitions.get(solver_name, {})
         for section_name, fields in sections.items():
@@ -958,10 +989,49 @@ class MainWindow(QtWidgets.QMainWindow):
                 widget = create_field_widget(field, parent=group_box)
                 self.parameter_widgets[section_name][field_name] = widget
                 group_layout.addRow(field_name, widget)
+                if section_name.lower() == "source":
+                    if field_name == "RunFile" and isinstance(widget, PathFieldWidget):
+                        self.run_file_widget = widget
+                        widget.pathChanged.connect(self._handle_run_file_changed)
+                    if field_name == "Materials" and isinstance(widget, MaterialsTableWidget):
+                        self.materials_widget = widget
 
             self.form_layout.addWidget(group_box)
 
         self.form_layout.addStretch(1)
+        if self.run_file_widget and self.run_file_widget.value().strip():
+            self._handle_run_file_changed(self.run_file_widget.value())
+
+    def _handle_run_file_changed(self, path_str):
+        if not self.materials_widget:
+            return
+        run_path_value = (path_str or "").strip()
+        if not run_path_value:
+            return
+        try:
+            candidate_path = Path(run_path_value).expanduser()
+        except (OSError, RuntimeError, ValueError):
+            return
+        if not candidate_path.exists():
+            return
+        run_input = str(candidate_path)
+        try:
+            material_names = run_reader(run_input)
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            error_signature = (run_input, str(exc))
+            if self._last_run_reader_error != error_signature:
+                self._last_run_reader_error = error_signature
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Run File Error",
+                    f"Unable to read materials from '{run_input}':\n{exc}",
+                )
+            return
+
+        self._last_run_reader_error = None
+        self.materials_widget.populate_from_names(material_names)
 
     def _save_to_json(self):
         solver_name = self.solver_combo.currentText()
