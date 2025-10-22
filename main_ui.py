@@ -1,6 +1,7 @@
 import copy
 import json
-from pathlib import Path
+import re
+from pathlib import Path, PureWindowsPath
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -73,16 +74,13 @@ STRUCTURE_DEFINITION = {
                 {
                     "source": [
                         {
-                            "Name": "ProjectFolder",
+                            "Name": "RunFile",
                             "type": "path finder",
-                        },
-                        {
-                            "Name": "ProjectName",
-                            "type": "text edit",
-                        },
-                        {
-                            "Name": "RunName",
-                            "type": "text edit",
+                            "mode": "file",
+                            "dialog": "open",
+                            "caption": "Select a .run file",
+                            "filter": "Run Files (*.run);;All Files (*)",
+                            "default_suffix": "run",
                         },
                         {
                             "Name": "Materials",
@@ -202,6 +200,7 @@ class PathFieldWidget(BaseFieldWidget):
         self.caption = field_def.get("caption", "Select path")
         self.filter = field_def.get("filter", "All Files (*)")
         self.default_suffix = field_def.get("default_suffix")
+        self.dialog_mode = field_def.get("dialog", "save")
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.line_edit = QtWidgets.QLineEdit(self)
@@ -221,14 +220,17 @@ class PathFieldWidget(BaseFieldWidget):
                 if selected:
                     self.line_edit.setText(selected[0])
         else:
-            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            dialog_func = QtWidgets.QFileDialog.getSaveFileName
+            if self.dialog_mode.lower() == "open":
+                dialog_func = QtWidgets.QFileDialog.getOpenFileName
+            path, _ = dialog_func(
                 self,
                 self.caption,
                 current_value,
                 self.filter,
             )
             if path:
-                if self.default_suffix and not Path(path).suffix:
+                if self.dialog_mode.lower() != "open" and self.default_suffix and not Path(path).suffix:
                     path = f"{path}.{self.default_suffix.lstrip('.')}"
                 self.line_edit.setText(path)
 
@@ -693,11 +695,73 @@ def format_reliability_tools(parameters):
     return formatted
 
 
+def _coerce_run_path(path_str):
+    normalized = str(path_str).strip()
+    if not normalized:
+        return None, normalized
+    if normalized.startswith("\\\\") or re.match(r"^[A-Za-z]:", normalized) or "\\" in normalized:
+        return PureWindowsPath(normalized), normalized
+    return Path(normalized).expanduser(), normalized
+
+
+def _extract_project_folder(path_obj, run_folder):
+    parts_lower = [part.lower() for part in path_obj.parts]
+    for idx, part in enumerate(parts_lower):
+        if part == "analysis" and idx > 0:
+            project_cls = path_obj.__class__
+            return str(project_cls(*path_obj.parts[:idx]))
+    parent_candidate = run_folder.parent
+    if parent_candidate == run_folder:
+        return str(run_folder)
+    return str(parent_candidate)
+
+
+def derive_run_metadata(run_file_value):
+    path_obj, normalized = _coerce_run_path(run_file_value)
+    if path_obj is None or not normalized:
+        raise ValueError("Run file path is required.")
+    if not path_obj.is_absolute():
+        raise ValueError("Run file path must be absolute.")
+    run_folder = path_obj.parent
+    if run_folder == path_obj:
+        raise ValueError("Run file path must include a parent folder.")
+
+    run_name_token = run_folder.name or ""
+    run_name_match = re.search(r"(\d+)$", run_name_token)
+    run_name = run_name_match.group(1) if run_name_match else run_name_token
+
+    file_stem = path_obj.stem
+    project_name = re.sub(r"\d+$", "", file_stem)
+    project_name = re.sub(r"[_\-\s]+$", "", project_name)
+    if not project_name:
+        project_name = file_stem
+
+    project_folder = _extract_project_folder(path_obj, run_folder)
+
+    return {
+        "RunFile": str(path_obj),
+        "RunName": run_name,
+        "ProjectName": project_name,
+        "ProjectFolder": project_folder,
+    }
+
+
 def format_reliability_source(fields):
     formatted = {}
+    run_file_raw = fields.get("RunFile", "")
+    if isinstance(run_file_raw, str):
+        run_file_value = run_file_raw.strip()
+    else:
+        run_file_value = str(run_file_raw).strip()
+
+    run_metadata = derive_run_metadata(run_file_value)
+    formatted.update(run_metadata)
+
     for field_name, value in fields.items():
         if field_name == "Materials":
             formatted[field_name] = format_materials(value)
+        elif field_name == "RunFile":
+            formatted.setdefault("RunFile", stringify_value(value))
         else:
             formatted[field_name] = stringify_value(value)
     return formatted
