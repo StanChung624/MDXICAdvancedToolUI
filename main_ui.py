@@ -7,6 +7,7 @@ from pathlib import Path
 
 from PySide6 import QtWidgets
 
+from config_manager import load_tool_path, save_tool_path
 from run_reader import run_reader
 from ui.constants import SECTION_EMOJIS, STRUCTURE_DEFINITION
 from ui.field_widgets import MaterialsTableWidget, PathFieldWidget, create_field_widget
@@ -64,6 +65,10 @@ class MainWindow(QtWidgets.QMainWindow):
             parent=central,
         )
         self.tool_path_widget.line_edit.setPlaceholderText("Select MDXICAdvancedTool executable")
+        stored_tool_path = load_tool_path()
+        if stored_tool_path:
+            self.tool_path_widget.set_path(stored_tool_path)
+        self.tool_path_widget.pathChanged.connect(self._persist_tool_path)
         self.run_solver_combo = QtWidgets.QComboBox(central)
         self.run_solver_combo.addItems(
             [
@@ -106,18 +111,22 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Name": "OutputFile",
                 "type": "path finder",
                 "mode": "file",
-                "caption": "Choose output JSON file",
+                "dialog": "open",
+                "caption": "Select output JSON file",
                 "filter": "JSON Files (*.json);;All Files (*)",
                 "default_suffix": "json",
             },
             parent=central,
         )
-        default_output_path = self.root_dir / "test.json"
+        default_output_path = self.root_dir / "ic_advanced_source.json"
         self.output_path_widget.set_path(str(default_output_path))
         footer_layout.addWidget(self.output_path_widget, 1)
         save_btn = QtWidgets.QPushButton("💾 Save to JSON", central)
         save_btn.clicked.connect(self._save_to_json)
         footer_layout.addWidget(save_btn)
+        load_btn = QtWidgets.QPushButton("📂 Load from JSON", central)
+        load_btn.clicked.connect(self._load_from_json)
+        footer_layout.addWidget(load_btn)
         main_layout.addLayout(footer_layout)
 
         if self.solvers:
@@ -130,6 +139,15 @@ class MainWindow(QtWidgets.QMainWindow):
             if widget:
                 widget.setParent(None)
                 widget.deleteLater()
+
+    def _persist_tool_path(self, path_str):
+        cleaned = (path_str or "").strip()
+        if cleaned:
+            try:
+                cleaned = os.fspath(Path(cleaned).expanduser())
+            except (OSError, RuntimeError, ValueError):
+                pass
+        save_tool_path(cleaned)
 
     def _rebuild_form(self, solver_name):
         self._clear_form()
@@ -395,6 +413,177 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(shlex, "join"):
             return shlex.join(command_parts)
         return " ".join(shlex.quote(part) for part in command_parts)
+
+    def _load_from_json(self):
+        output_path_text = self.output_path_widget.value().strip() if hasattr(self, "output_path_widget") else ""
+        if not output_path_text:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Missing JSON Path",
+                "Please choose a JSON file to load.",
+            )
+            return
+
+        candidate_path = Path(output_path_text).expanduser()
+        if not candidate_path.is_absolute():
+            candidate_path = self.root_dir / candidate_path
+        if not candidate_path.exists():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "File Not Found",
+                f"No JSON file found at '{candidate_path}'.",
+            )
+            return
+
+        try:
+            with open(candidate_path, "r", encoding="utf-8") as handle:
+                raw_payload = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Load Error",
+                f"Failed to read configuration:\n{exc}",
+            )
+            return
+
+        solver_name, solver_payload = self._select_solver_from_payload(raw_payload)
+        if not solver_name or not isinstance(solver_payload, dict):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Unsupported Configuration",
+                "The selected JSON does not contain data for the available solvers.",
+            )
+            return
+
+        sections = self._prepare_section_values(solver_name, solver_payload)
+
+        self.solver_combo.blockSignals(True)
+        solver_index = self.solver_combo.findText(solver_name)
+        if solver_index >= 0:
+            self.solver_combo.setCurrentIndex(solver_index)
+        self.solver_combo.blockSignals(False)
+        self._rebuild_form(solver_name)
+        self._apply_section_values(sections)
+
+        QtWidgets.QMessageBox.information(
+            self,
+            "Configuration Loaded",
+            f"Parameters updated from '{candidate_path}'.",
+        )
+
+    SOLVER_KEY_ALIASES = {
+        "MappingTool": ["MappingTool", "Maptools"],
+        "ReliabilityTools": ["ReliabilityTools"],
+        "PressureOven": ["PressureOven"],
+    }
+
+    def _select_solver_from_payload(self, payload):
+        if not isinstance(payload, dict):
+            return None, None
+
+        current_solver = self.solver_combo.currentText()
+        solver_candidates = [solver for solver in [current_solver] + list(self.solvers) if solver]
+        seen = set()
+        ordered_candidates = []
+        for solver in solver_candidates:
+            if solver not in seen:
+                ordered_candidates.append(solver)
+                seen.add(solver)
+
+        for solver in ordered_candidates:
+            for alias in self.SOLVER_KEY_ALIASES.get(solver, []):
+                solver_payload = self._case_insensitive_get(payload, alias)
+                if isinstance(solver_payload, dict):
+                    return solver, solver_payload
+
+        dict_entries = [(str(key), value) for key, value in payload.items() if isinstance(value, dict)]
+        if len(dict_entries) == 1:
+            key, value = dict_entries[0]
+            inferred_solver = self._infer_solver_from_key(key) or current_solver
+            return inferred_solver, value
+
+        return None, None
+
+    def _infer_solver_from_key(self, key):
+        lowered = str(key).lower()
+        for solver, aliases in self.SOLVER_KEY_ALIASES.items():
+            for alias in aliases:
+                if lowered == alias.lower():
+                    return solver
+        return None
+
+    def _prepare_section_values(self, solver_name, solver_payload):
+        if solver_name == "PressureOven":
+            return self._prepare_pressure_oven_sections(solver_payload)
+
+        sections = {}
+        solver_sections = self.solver_definitions.get(solver_name, {})
+        for section_name in solver_sections:
+            section_payload = self._case_insensitive_get(solver_payload, section_name)
+            if isinstance(section_payload, dict):
+                sections[section_name] = section_payload
+        return sections
+
+    def _prepare_pressure_oven_sections(self, solver_payload):
+        if not isinstance(solver_payload, dict):
+            return {}
+
+        ramp_rows = []
+        ramp_payload = solver_payload.get("PressureRampProfile") or {}
+        if isinstance(ramp_payload, dict):
+            increments = ramp_payload.get("Pressure increment (Pa)") or []
+            time_marks = ramp_payload.get("Time mark (s)") or []
+            for increment, time_mark in zip(increments, time_marks):
+                ramp_rows.append(
+                    {
+                        "Pressure increment (Pa)": increment,
+                        "Time mark (s)": time_mark,
+                    }
+                )
+
+        return {
+            "general": {
+                "OutputFolder": solver_payload.get("OutputFolder", ""),
+                "Void shape (Cylindrical/Spherical)": solver_payload.get("Void shape (Cylindrical/Spherical)", ""),
+            },
+            "material properties": solver_payload.get("MaterialProperties", {}),
+            "process conditions": solver_payload.get("ProcessConditions", {}),
+            "pressure ramp profile": {
+                "Pressure Ramp Profile": ramp_rows,
+            },
+        }
+
+    def _apply_section_values(self, sections):
+        for section_name, fields in self.parameter_widgets.items():
+            section_payload = sections.get(section_name) if sections else None
+            if not isinstance(section_payload, dict):
+                continue
+            for field_name, widget in fields.items():
+                value = self._case_insensitive_get(section_payload, field_name)
+                if value is None:
+                    continue
+                self._set_widget_value(widget, value)
+
+    @staticmethod
+    def _case_insensitive_get(container, key):
+        if not isinstance(container, dict):
+            return None
+        target = str(key).lower()
+        for candidate, value in container.items():
+            if str(candidate).lower() == target:
+                return value
+        return None
+
+    def _set_widget_value(self, widget, value):
+        setter = getattr(widget, "set_value", None)
+        if callable(setter):
+            setter(value)
+            return
+        if isinstance(widget, PathFieldWidget):
+            widget.set_path(str(value), emit_change=False)
+            return
+        if hasattr(widget, "line_edit"):
+            widget.line_edit.setText("" if value is None else str(value))
 
 
 def main():

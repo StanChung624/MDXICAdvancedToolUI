@@ -13,8 +13,8 @@ SECTION_EMOJIS = {
 
 STRUCTURE_DEFINITION = {
     "solver": [
-        "MappingTool",
         "ReliabilityTools",
+        "MappingTool",
         "PressureOven",
     ],
     "parameters": [

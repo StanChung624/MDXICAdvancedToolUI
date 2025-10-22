@@ -27,6 +27,9 @@ class TextFieldWidget(BaseFieldWidget):
     def value(self):
         return self.line_edit.text()
 
+    def set_value(self, value):
+        self.line_edit.setText("" if value is None else str(value))
+
 
 class PathFieldWidget(BaseFieldWidget):
     pathChanged = QtCore.Signal(str)
@@ -84,6 +87,11 @@ class PathFieldWidget(BaseFieldWidget):
     def _emit_current_path(self):
         self.pathChanged.emit(self.value())
 
+    def set_value(self, path):
+        if path is None:
+            path = ""
+        self.set_path(str(path), emit_change=False)
+
 
 class ListFieldWidget(BaseFieldWidget):
     def __init__(self, field_def, parent=None):
@@ -97,6 +105,15 @@ class ListFieldWidget(BaseFieldWidget):
 
     def value(self):
         return self.combo.currentText()
+
+    def set_value(self, value):
+        text = "" if value is None else str(value)
+        index = self.combo.findText(text)
+        if index < 0 and text:
+            self.combo.addItem(text)
+            index = self.combo.findText(text)
+        if index >= 0:
+            self.combo.setCurrentIndex(index)
 
 
 class NumberFieldWidget(BaseFieldWidget):
@@ -125,6 +142,12 @@ class NumberFieldWidget(BaseFieldWidget):
             return int(number)
         return number
 
+    def set_value(self, value):
+        if value in ("", None):
+            self.line_edit.setText("")
+            return
+        self.line_edit.setText(str(value))
+
 
 class KeyValueGroupWidget(BaseFieldWidget):
     def __init__(self, field_def, parent=None):
@@ -145,6 +168,17 @@ class KeyValueGroupWidget(BaseFieldWidget):
 
     def value(self):
         return {name: widget.value() for name, widget in self.widgets.items()}
+
+    def set_value(self, values):
+        if not isinstance(values, dict):
+            return
+        for name, widget in self.widgets.items():
+            raw_value = values.get(name)
+            if raw_value is None:
+                continue
+            setter = getattr(widget, "set_value", None)
+            if callable(setter):
+                setter(raw_value)
 
 
 class KeyValueListWidget(BaseFieldWidget):
@@ -174,6 +208,17 @@ class KeyValueListWidget(BaseFieldWidget):
         if "fields" in field_def:
             return KeyValueGroupWidget(field_def, parent=self)
         raise ValueError(f"Unrecognized key-value list field definition: {field_def}")
+
+    def set_value(self, values):
+        if not isinstance(values, dict):
+            return
+        for name, widget in self.widgets.items():
+            raw_value = values.get(name)
+            if raw_value is None:
+                continue
+            setter = getattr(widget, "set_value", None)
+            if callable(setter):
+                setter(raw_value)
 
 
 class TableRowWidget(QtWidgets.QWidget):
@@ -211,6 +256,15 @@ class TableRowWidget(QtWidgets.QWidget):
     def value(self):
         return {name: widget.value() for name, widget in self.widgets.items()}
 
+    def set_row_data(self, data):
+        if not isinstance(data, dict):
+            return
+        for name, widget in self.widgets.items():
+            raw_value = data.get(name)
+            setter = getattr(widget, "set_value", None)
+            if callable(setter):
+                setter(raw_value)
+
 
 class TableFieldWidget(BaseFieldWidget):
     def __init__(self, field_def, parent=None):
@@ -240,6 +294,7 @@ class TableFieldWidget(BaseFieldWidget):
         row.removed.connect(self._remove_row)
         self.rows_layout.addWidget(row)
         self.row_widgets.append(row)
+        return row
 
     def _remove_row(self, row_widget):
         self.row_widgets.remove(row_widget)
@@ -248,6 +303,18 @@ class TableFieldWidget(BaseFieldWidget):
 
     def value(self):
         return [row.value() for row in self.row_widgets]
+
+    def clear_rows(self):
+        for row in list(self.row_widgets):
+            self._remove_row(row)
+
+    def set_value(self, rows):
+        if not isinstance(rows, list):
+            rows = []
+        self.clear_rows()
+        for row_data in rows:
+            row = self.add_row()
+            row.set_row_data(row_data or {})
 
 
 class ModelDialog(QtWidgets.QDialog):
@@ -369,6 +436,7 @@ class MaterialRowWidget(QtWidgets.QFrame):
         self.model_column = model_column
         self.parameters_column = parameters_column
         self.model_entries = []
+        self.model_widgets = []
 
         self.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.setStyleSheet("QFrame { border: 2px solid #e0e0e0; border-radius: 8px; }")
@@ -414,12 +482,15 @@ class MaterialRowWidget(QtWidgets.QFrame):
                 widget = ModelDisplayWidget(entry, parent=self.models_container)
                 widget.removed.connect(self._remove_model)
                 self.models_layout.addWidget(widget)
+                self.model_widgets.append(widget)
 
     def _remove_model(self, widget):
         try:
             self.model_entries.remove(widget.model_entry)
         except ValueError:
             pass
+        if widget in self.model_widgets:
+            self.model_widgets.remove(widget)
         widget.setParent(None)
         widget.deleteLater()
 
@@ -441,6 +512,67 @@ class MaterialRowWidget(QtWidgets.QFrame):
 
     def set_material_name(self, name):
         self.name_edit.setText(stringify_value(name))
+
+    def _clear_model_entries(self):
+        for widget in list(self.model_widgets):
+            if widget in self.model_widgets:
+                self.model_widgets.remove(widget)
+            widget.setParent(None)
+            widget.deleteLater()
+        self.model_entries = []
+
+    def _append_model_entry(self, model_info):
+        if not isinstance(model_info, dict):
+            return
+        name = stringify_value(model_info.get("Name", ""))
+        parameters = model_info.get("Parameters", [])
+        normalized_parameters = []
+        if isinstance(parameters, dict):
+            source_items = parameters.items()
+        else:
+            source_items = []
+            for item in parameters or []:
+                if isinstance(item, dict) and item:
+                    source_items.extend(item.items())
+
+        for key, value in source_items:
+            normalized_parameters.append({str(key): stringify_value(value)})
+
+        entry = {
+            "Model": {
+                "Name": name,
+                "Parameters": normalized_parameters,
+            }
+        }
+        self.model_entries.append(entry)
+        widget = ModelDisplayWidget(entry, parent=self.models_container)
+        widget.removed.connect(self._remove_model)
+        self.models_layout.addWidget(widget)
+        self.model_widgets.append(widget)
+
+    def set_data(self, material_data):
+        if not isinstance(material_data, dict):
+            return
+        self.name_edit.setText(stringify_value(material_data.get("Name", "")))
+        self._clear_model_entries()
+
+        def extract_model_payload(raw_entry):
+            if not isinstance(raw_entry, dict):
+                return None
+            if isinstance(raw_entry.get("Model"), dict):
+                return raw_entry.get("Model")
+            return raw_entry
+
+        models_field = material_data.get("Models")
+        if isinstance(models_field, list):
+            for raw_model in models_field:
+                payload = extract_model_payload(raw_model)
+                if payload:
+                    self._append_model_entry(payload)
+        single_model = material_data.get("Model")
+        payload = extract_model_payload(single_model)
+        if payload:
+            self._append_model_entry(payload)
 
 
 class MaterialsTableWidget(BaseFieldWidget):
@@ -507,6 +639,14 @@ class MaterialsTableWidget(BaseFieldWidget):
                 values.append(data)
         return values
 
+    def set_value(self, materials):
+        self.clear_rows()
+        for entry in materials or []:
+            if not isinstance(entry, dict):
+                continue
+            row = self.add_row()
+            row.set_data(entry)
+
 
 def create_field_widget(field_def, parent=None):
     ftype = field_def.get("type", "").lower()
@@ -525,4 +665,3 @@ def create_field_widget(field_def, parent=None):
             return MaterialsTableWidget(field_def, parent=parent)
         return TableFieldWidget(field_def, parent=parent)
     raise ValueError(f"Unsupported field type: {field_def.get('type')}")
-
