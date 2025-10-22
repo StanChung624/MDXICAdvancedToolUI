@@ -281,7 +281,16 @@ class NumberFieldWidget(BaseFieldWidget):
         layout.addWidget(self.line_edit)
 
     def value(self):
-        return self.line_edit.text()
+        text = self.line_edit.text().strip()
+        if not text:
+            return ""
+        try:
+            number = float(text)
+        except ValueError:
+            return text
+        if number.is_integer():
+            return int(number)
+        return number
 
 
 class ModelDialog(QtWidgets.QDialog):
@@ -679,10 +688,10 @@ def stringify_value(value):
         return "true" if value else "false"
     if isinstance(value, float):
         if value.is_integer():
-            value = int(value)
-        return str(value)
+            return int(value)
+        return value
     if isinstance(value, int):
-        return str(value)
+        return value
     if value is None:
         return ""
     return str(value)
