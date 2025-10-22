@@ -14,12 +14,17 @@ SECTION_EMOJIS = {
     "configuration": "⚙️",
     "materials": "🧬",
     "model": "🧠",
+    "general": "📋",
+    "material properties": "🧪",
+    "process conditions": "⏱️",
+    "pressure ramp profile": "📈",
 }
 
 STRUCTURE_DEFINITION = {
     "solver": [
         "MappingTool",
         "ReliabilityTools",
+        "PressureOven",
     ],
     "parameters": [
         {
@@ -166,6 +171,86 @@ STRUCTURE_DEFINITION = {
                         },
                     ],
                 }
+            ]
+        },
+        {
+            "PressureOven": [
+                {
+                    "general": [
+                        {
+                            "Name": "OutputFolder",
+                            "type": "path finder",
+                            "mode": "directory",
+                            "caption": "Select an output directory",
+                        },
+                        {
+                            "Name": "Void shape (Cylindrical/Spherical)",
+                            "type": "list",
+                            "list": [
+                                "Cylindrical",
+                                "Spherical",
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "material properties": [
+                        {
+                            "Name": "Henry's coef. (mol N^-1 m^-1)",
+                            "type": "number",
+                        },
+                        {
+                            "Name": "Diffusivity of air concentration (m^2 s^-1)",
+                            "type": "number",
+                        },
+                        {
+                            "Name": "Surface tension coef. (N m^-1)",
+                            "type": "number",
+                        },
+                        {
+                            "Name": "Avogadro const. (m^3 Pa K^-1 mol^-1)",
+                            "type": "number",
+                        },
+                    ],
+                },
+                {
+                    "process conditions": [
+                        {
+                            "Name": "Working temperature (K)",
+                            "type": "number",
+                        },
+                        {
+                            "Name": "Initial void radius (m)",
+                            "type": "number",
+                        },
+                        {
+                            "Name": "Initial pressure (Pa)",
+                            "type": "number",
+                        },
+                        {
+                            "Name": "Process time (s)",
+                            "type": "number",
+                        },
+                    ],
+                },
+                {
+                    "pressure ramp profile": [
+                        {
+                            "Name": "Pressure Ramp Profile",
+                            "type": "table",
+                            "columns": [
+                                {
+                                    "Name": "Pressure increment (Pa)",
+                                    "type": "number",
+                                },
+                                {
+                                    "Name": "Time mark (s)",
+                                    "type": "number",
+                                },
+                            ],
+                        }
+                    ],
+                },
             ]
         },
     ],
@@ -703,6 +788,8 @@ def format_solver_payload(solver_name, parameters):
         return {"Maptools": format_mapping_tool(parameters)}
     if solver_name == "ReliabilityTools":
         return {"ReliabilityTools": format_reliability_tools(parameters)}
+    if solver_name == "PressureOven":
+        return {"PressureOven": format_pressure_oven(parameters)}
     # Fallback: just stringify collected parameters.
     formatted = {
         section.capitalize(): {field: stringify_value(val) for field, val in fields.items()}
@@ -728,6 +815,74 @@ def format_reliability_tools(parameters):
         else:
             formatted[section_key] = {field: stringify_value(val) for field, val in fields.items()}
     return formatted
+
+
+def format_pressure_oven(parameters):
+    general = parameters.get("general", {})
+    mat_props = parameters.get("material properties", {})
+    proc_conditions = parameters.get("process conditions", {})
+    ramp_section = parameters.get("pressure ramp profile", {})
+
+    payload = {}
+
+    output_folder = general.get("OutputFolder")
+    if output_folder not in ("", None):
+        payload["OutputFolder"] = stringify_value(output_folder)
+
+    void_shape = general.get("Void shape (Cylindrical/Spherical)")
+    if void_shape not in ("", None):
+        payload["Void shape (Cylindrical/Spherical)"] = stringify_value(void_shape)
+
+    material_properties = {
+        key: stringify_value(value)
+        for key, value in mat_props.items()
+        if value not in ("", None)
+    }
+    if material_properties:
+        payload["MaterialProperties"] = material_properties
+
+    process_conditions = {
+        key: stringify_value(value)
+        for key, value in proc_conditions.items()
+        if value not in ("", None)
+    }
+    if process_conditions:
+        payload["ProcessConditions"] = process_conditions
+
+    ramp_rows = ramp_section.get("Pressure Ramp Profile")
+    ramp_profile = format_pressure_ramp_profile(ramp_rows)
+    if ramp_profile:
+        payload["PressureRampProfile"] = ramp_profile
+
+    return payload
+
+
+def format_pressure_ramp_profile(rows):
+    if not rows:
+        return {}
+
+    increments = []
+    time_marks = []
+    has_data = False
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        increment = row.get("Pressure increment (Pa)")
+        time_mark = row.get("Time mark (s)")
+        if increment in ("", None) or time_mark in ("", None):
+            continue
+        increments.append(stringify_value(increment))
+        time_marks.append(stringify_value(time_mark))
+        has_data = True
+
+    if not has_data:
+        return {}
+
+    return {
+        "Pressure increment (Pa)": increments,
+        "Time mark (s)": time_marks,
+    }
 
 
 def _coerce_run_path(path_str):
