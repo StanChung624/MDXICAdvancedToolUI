@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Dict
 
-_CONFIG_PATH = Path(__file__).parent / "config.json"
+_CONFIG_PATH = "./ic_adv_ui_config.json"
 
 
 def _read_raw_config() -> Dict[str, str]:
