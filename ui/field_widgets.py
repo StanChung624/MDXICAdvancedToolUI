@@ -61,9 +61,10 @@ class PathFieldWidget(BaseFieldWidget):
                 if selected:
                     self.line_edit.setText(selected[0])
         else:
-            dialog_func = QtWidgets.QFileDialog.getSaveFileName
-            if self.dialog_mode.lower() == "open":
-                dialog_func = QtWidgets.QFileDialog.getOpenFileName
+            dialog_mode = (self.dialog_mode or "save").lower()
+            suffix = (self.default_suffix or "").lower()
+            use_save_dialog = dialog_mode != "open" or suffix == "json"
+            dialog_func = QtWidgets.QFileDialog.getSaveFileName if use_save_dialog else QtWidgets.QFileDialog.getOpenFileName
             path, _ = dialog_func(
                 self,
                 self.caption,
@@ -71,9 +72,8 @@ class PathFieldWidget(BaseFieldWidget):
                 self.filter,
             )
             if path:
-                if self.dialog_mode.lower() != "open" and self.default_suffix and not Path(path).suffix:
-                    path = f"{path}.{self.default_suffix.lstrip('.')}"
-                self.line_edit.setText(path)
+                normalized = self._normalize_and_materialize_path(path)
+                self.line_edit.setText(normalized)
                 self._emit_current_path()
 
     def value(self):
@@ -85,12 +85,42 @@ class PathFieldWidget(BaseFieldWidget):
             self._emit_current_path()
 
     def _emit_current_path(self):
+        current_value = self.value()
+        normalized = self._normalize_and_materialize_path(current_value)
+        if normalized != current_value:
+            self.line_edit.setText(normalized)
         self.pathChanged.emit(self.value())
 
     def set_value(self, path):
         if path is None:
             path = ""
         self.set_path(str(path), emit_change=False)
+
+    def _normalize_and_materialize_path(self, raw_path):
+        if raw_path is None:
+            return ""
+        text = str(raw_path).strip()
+        if not text:
+            return ""
+        suffix = (self.default_suffix or "").lstrip(".")
+        if not suffix:
+            return text
+        if suffix.lower() != "json":
+            if not Path(text).suffix:
+                return f"{text}.{suffix}"
+            return text
+        try:
+            candidate = Path(text).expanduser()
+        except (OSError, RuntimeError, ValueError):
+            return text
+        if not candidate.suffix:
+            candidate = candidate.with_suffix(f".{suffix}")
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            candidate.touch(exist_ok=True)
+        except OSError:
+            pass
+        return str(candidate)
 
 
 class ListFieldWidget(BaseFieldWidget):
