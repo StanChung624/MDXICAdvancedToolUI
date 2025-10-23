@@ -633,6 +633,18 @@ class MainWindow(QtWidgets.QMainWindow):
             counter += 1
             suffix = f"_{counter}"
 
+        output_path = Path(output_path)
+        serialized_payload = None
+        try:
+            with output_path.open("r", encoding="utf-8") as handle:
+                serialized_payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            try:
+                with output_path.open("r", encoding="utf-8") as handle:
+                    serialized_payload = handle.read()
+            except OSError:
+                serialized_payload = None
+
         log_payload = {
             "timestamp": now.isoformat(),
             "ui_solver": solver_name,
@@ -643,6 +655,8 @@ class MainWindow(QtWidgets.QMainWindow):
             "command_line": self._format_command(command),
             "parameters": parameters,
         }
+        if serialized_payload is not None:
+            log_payload["solver_input"] = serialized_payload
 
         try:
             with open(log_path, "w", encoding="utf-8") as handle:

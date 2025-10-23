@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Dict
 
-_CONFIG_PATH = Path("./.ic_adv_ui_config")
+_CONFIG_PATH = Path("./.ICAdvConfig")
 
 
 def _read_raw_config() -> Dict[str, str]:
