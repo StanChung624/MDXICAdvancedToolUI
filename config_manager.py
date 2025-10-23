@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Dict
 
-_CONFIG_PATH = "./ic_adv_ui_config.json"
+_CONFIG_PATH = Path("./ic_adv_ui_config.json")
 
 
 def _read_raw_config() -> Dict[str, str]:
@@ -34,7 +34,7 @@ def load_tool_path() -> str:
     return _read_raw_config().get("tool_path", "")
 
 def load_parameter() -> str:
-    return _read_raw_config().get("parameters", "")
+    return _read_raw_config().get("parameter", "")
 
 
 def save_tool_path(path: str) -> None:
