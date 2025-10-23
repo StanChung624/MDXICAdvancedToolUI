@@ -33,6 +33,9 @@ def _write_raw_config(data: Dict[str, str]) -> None:
 def load_tool_path() -> str:
     return _read_raw_config().get("tool_path", "")
 
+def load_parameter() -> str:
+    return _read_raw_config().get("parameters", "")
+
 
 def save_tool_path(path: str) -> None:
     data = _read_raw_config()

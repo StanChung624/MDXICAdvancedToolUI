@@ -3,11 +3,13 @@ import json
 import os
 import shlex
 import subprocess
+import threading
+from datetime import datetime
 from pathlib import Path
 
 from PySide6 import QtWidgets
 
-from config_manager import load_tool_path, save_tool_path
+from config_manager import load_tool_path, save_tool_path, load_parameter
 from run_reader import run_reader
 from ui.constants import SECTION_EMOJIS, STRUCTURE_DEFINITION
 from ui.field_widgets import MaterialsTableWidget, PathFieldWidget, create_field_widget
@@ -316,6 +318,7 @@ class MainWindow(QtWidgets.QMainWindow):
         solver_data = self._collect_current_parameters()
         if solver_data is None:
             return
+        solver_name, collected_parameters = solver_data
 
         selected_solver = self.run_solver_combo.currentText() if hasattr(self, "run_solver_combo") else ""
         solver_mapping = {
@@ -376,20 +379,41 @@ class MainWindow(QtWidgets.QMainWindow):
             os.fspath(output_path),
         ]
 
+        config_param = load_parameter()
+        if len(config_param) > 0:
+            command.append('--param')
+            command.append(config_param)
+
+        log_path = self._write_run_log(
+            solver_name,
+            selected_solver,
+            tool_path,
+            output_path,
+            command,
+            collected_parameters,
+        )
+
         try:
-            completed = subprocess.run(command, capture_output=True, text=True, check=False)
+            return_code, stdout_text, stderr_text = self._execute_command_with_logging(command, log_path)
         except OSError as exc:
+            self._append_log_line(log_path, "ERROR", f"Failed to start MDXICAdvancedTool: {exc}")
+            self._append_log_summary(log_path, "failed to launch")
             QtWidgets.QMessageBox.critical(
                 self,
                 "Execution Error",
-                f"Failed to start MDXICAdvancedTool:\n{exc}",
+                f"Failed to start MDXICAdvancedTool:\n{exc}"
+                + (f"\n\nLog written to: {log_path}" if log_path else ""),
             )
             return
 
-        if completed.returncode != 0:
-            details = completed.stderr.strip() or completed.stdout.strip()
+        self._append_log_summary(log_path, return_code)
+
+        if return_code != 0:
+            details = stderr_text.strip() or stdout_text.strip()
             if not details:
-                details = f"Process exited with code {completed.returncode}."
+                details = f"Process exited with code {return_code}."
+            if log_path:
+                details += f"\n\nLog written to: {log_path}"
             QtWidgets.QMessageBox.critical(
                 self,
                 "Tool Execution Failed",
@@ -397,9 +421,11 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
 
-        success_message = completed.stdout.strip() or "MDXICAdvancedTool finished successfully."
-        if completed.stderr.strip():
-            success_message += f"\n\nWarnings:\n{completed.stderr.strip()}"
+        success_message = stdout_text.strip() or "MDXICAdvancedTool finished successfully."
+        if stderr_text.strip():
+            success_message += f"\n\nWarnings:\n{stderr_text.strip()}"
+        if log_path:
+            success_message += f"\n\nLog written to: {log_path}"
         QtWidgets.QMessageBox.information(
             self,
             "Tool Execution Finished",
@@ -584,6 +610,109 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if hasattr(widget, "line_edit"):
             widget.line_edit.setText("" if value is None else str(value))
+
+    def _write_run_log(
+        self,
+        solver_name,
+        selected_solver,
+        tool_path,
+        output_path,
+        command,
+        parameters,
+    ):
+        now = datetime.now()
+        timestamp = now.strftime("%Y%m%d_%H%M%S")
+        log_dir = Path(".")
+        suffix = ""
+        counter = 1
+        while True:
+            log_name = f"run_log_{timestamp}{suffix}.log"
+            log_path = log_dir / log_name
+            if not log_path.exists():
+                break
+            counter += 1
+            suffix = f"_{counter}"
+
+        log_payload = {
+            "timestamp": now.isoformat(),
+            "ui_solver": solver_name,
+            "run_solver": selected_solver,
+            "tool_path": os.fspath(tool_path),
+            "output_path": os.fspath(output_path),
+            "command": command,
+            "command_line": self._format_command(command),
+            "parameters": parameters,
+        }
+
+        try:
+            with open(log_path, "w", encoding="utf-8") as handle:
+                json.dump(log_payload, handle, indent=4)
+                handle.write("\n\n=== Command Output ===\n")
+        except OSError:
+            return None
+        return log_path
+
+    def _execute_command_with_logging(self, command, log_path):
+        stdout_lines = []
+        stderr_lines = []
+
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+
+        def reader(stream, label, collector):
+            try:
+                for line in iter(stream.readline, ""):
+                    collector.append(line)
+                    self._append_log_line(log_path, label, line.rstrip("\n"))
+            finally:
+                stream.close()
+
+        threads = []
+        if process.stdout:
+            t_out = threading.Thread(target=reader, args=(process.stdout, "STDOUT", stdout_lines), daemon=True)
+            t_out.start()
+            threads.append(t_out)
+        if process.stderr:
+            t_err = threading.Thread(target=reader, args=(process.stderr, "STDERR", stderr_lines), daemon=True)
+            t_err.start()
+            threads.append(t_err)
+
+        for thread in threads:
+            thread.join()
+
+        return_code = process.wait()
+        stdout_text = "".join(stdout_lines)
+        stderr_text = "".join(stderr_lines)
+        return return_code, stdout_text, stderr_text
+
+    def _append_log_line(self, log_path, label, message):
+        if not log_path:
+            return
+        timestamp = datetime.now().isoformat()
+        try:
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write(f"[{timestamp}] {label}: {message}\n")
+        except OSError:
+            pass
+
+    def _append_log_summary(self, log_path, return_code):
+        if not log_path:
+            return
+        summary_lines = [
+            "\n=== Summary ===",
+            f"Completed at: {datetime.now().isoformat()}",
+            f"Exit code: {return_code}",
+        ]
+        try:
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write("\n".join(summary_lines) + "\n")
+        except OSError:
+            pass
 
 
 def main():
