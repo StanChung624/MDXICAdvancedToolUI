@@ -424,6 +424,13 @@ class MainWindow(QtWidgets.QMainWindow):
         success_message = stdout_text.strip() or "MDXICAdvancedTool finished successfully."
         if stderr_text.strip():
             success_message += f"\n\nWarnings:\n{stderr_text.strip()}"
+
+        plot_path, plot_warning = self._maybe_generate_pressure_oven_plot(selected_solver, collected_parameters)
+        if plot_warning:
+            success_message += f"\n\nPlot warning: {plot_warning}"
+        elif plot_path:
+            success_message += f"\n\nPressure/radius plot saved to: {plot_path}"
+
         if log_path:
             success_message += f"\n\nLog written to: {log_path}"
         QtWidgets.QMessageBox.information(
@@ -431,7 +438,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "Tool Execution Finished",
             success_message,
         )
-
+        
     @staticmethod
     def _format_command(command_parts):
         if os.name == "nt":
@@ -727,6 +734,44 @@ class MainWindow(QtWidgets.QMainWindow):
                 handle.write("\n".join(summary_lines) + "\n")
         except OSError:
             pass
+
+    def _maybe_generate_pressure_oven_plot(self, selected_solver, collected_parameters):
+        if selected_solver != "PressureOven":
+            return None, None
+
+        general_section = (collected_parameters or {}).get("general") or {}
+        output_folder_text = (general_section.get("OutputFolder") or "").strip()
+        if not output_folder_text:
+            return None, "OutputFolder is not set in the General section."
+
+        try:
+            folder_path = Path(output_folder_text).expanduser()
+        except (OSError, RuntimeError, ValueError) as exc:
+            return None, f"Invalid OutputFolder path: {exc}"
+        if not folder_path.is_absolute():
+            folder_path = self.root_dir / folder_path
+        csv_path = folder_path / "pressure_radius_history.csv"
+
+        if not csv_path.exists():
+            return None, f"CSV not found at {csv_path}"
+
+        try:
+            from plot_pressure_radius import load_columns, plot_with_matplotlib
+        except Exception as exc:
+            return None, f"Unable to import plotting helper: {exc}"
+
+        try:
+            time, radius, pressure = load_columns(csv_path)
+        except Exception as exc:
+            return None, f"Failed to read CSV data: {exc}"
+
+        output_png = csv_path.with_suffix(".png")
+        try:
+            plot_with_matplotlib(time, radius, pressure, output_png)
+        except Exception as exc:
+            return None, f"Matplotlib rendering failed: {exc}"
+
+        return output_png, None
 
 
 def main():
