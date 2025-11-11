@@ -105,11 +105,11 @@ STRUCTURE_DEFINITION = {
                                             "Name": "FatigueModel: Modified Coffin Manson",
                                             "fields": [
                                                 {
-                                                    "Name": "YoungModulus",
+                                                    "Name": "YoungModulus (MPa)",
                                                     "type": "number",
                                                 },
                                                 {
-                                                    "Name": "YieldStress",
+                                                    "Name": "YieldStress (MPa)",
                                                     "type": "number",
                                                 },
                                                 {
@@ -118,6 +118,10 @@ STRUCTURE_DEFINITION = {
                                                 },
                                                 {
                                                     "Name": "m",
+                                                    "type": "number",
+                                                },
+                                                {
+                                                    "Name": "Epislon_f",
                                                     "type": "number",
                                                 },
                                             ],
