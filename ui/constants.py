@@ -93,8 +93,8 @@ STRUCTURE_DEFINITION = {
                                     "type": "list",
                                     "list": [
                                         "FatigueModel: Modified Coffin Manson",
-                                        "FailureModel: Hill-Tsai Criterion",
-                                        "FailureModel: Von Mises Criterion",
+                                        "FailureModel: Tsai-Wu Criterion",
+                                        "FailureModel: Maximum Stress Criterion",
                                     ],
                                 },
                                 {
@@ -127,37 +127,73 @@ STRUCTURE_DEFINITION = {
                                             ],
                                         },
                                         {
-                                            "Name": "FailureModel: Hill-Tsai Criterion",
+                                            "Name": "FailureModel: Tsai-Wu Criterion",
                                             "fields": [
                                                 {
-                                                    "Name": "Xc",
+                                                    "Name": "Xt (MPa)",
                                                     "type": "number",
                                                 },
                                                 {
-                                                    "Name": "Xt",
+                                                    "Name": "Xc (MPa)",
                                                     "type": "number",
                                                 },
                                                 {
-                                                    "Name": "Yc",
+                                                    "Name": "Yt (MPa)",
                                                     "type": "number",
                                                 },
                                                 {
-                                                    "Name": "Yt",
+                                                    "Name": "Yc (MPa)",
+                                                    "type": "number",
+                                                },                                                
+                                                {
+                                                    "Name": "Zt (MPa)",
+                                                    "type": "number",
+                                                },                                                
+                                                {
+                                                    "Name": "Zc (MPa)",
                                                     "type": "number",
                                                 },
                                                 {
-                                                    "Name": "Sxy",
+                                                    "Name": "S12 (MPa)",
+                                                    "type": "number",
+                                                },                                                
+                                                {
+                                                    "Name": "S23 (MPa)",
+                                                    "type": "number",
+                                                },                                                
+                                                {
+                                                    "Name": "S13 (MPa)",
                                                     "type": "number",
                                                 },
                                             ],
                                         },
                                         {
-                                            "Name": "FailureModel: Von Mises Criterion",
+                                            "Name": "FailureModel: Maximum Stress Criterion",
                                             "fields": [
                                                 {
-                                                    "Name": "Strength",
+                                                    "Name": "X (MPa)",
                                                     "type": "number",
-                                                }
+                                                },                                                
+                                                {
+                                                    "Name": "Y (MPa)",
+                                                    "type": "number",
+                                                },                                                
+                                                {
+                                                    "Name": "Z (MPa)",
+                                                    "type": "number",
+                                                },                                                
+                                                {
+                                                    "Name": "S12 (MPa)",
+                                                    "type": "number",
+                                                },                                                
+                                                {
+                                                    "Name": "S23 (MPa)",
+                                                    "type": "number",
+                                                },                                                
+                                                {
+                                                    "Name": "S13 (MPa)",
+                                                    "type": "number",
+                                                },                                                
                                             ],
                                         },
                                     ],
